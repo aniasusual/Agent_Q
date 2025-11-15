@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Generate Agent Q Icons</title>
+</head>
+<body>
+  <h2>Agent Q Icon Generator</h2>
+  <p>Right-click each canvas and "Save image as..." to create the icon files</p>
+
+  <div>
+    <h3>16x16 Icon</h3>
+    <canvas id="icon16" width="16" height="16"></canvas>
+  </div>
+
+  <div>
+    <h3>48x48 Icon</h3>
+    <canvas id="icon48" width="48" height="48"></canvas>
+  </div>
+
+  <div>
+    <h3>128x128 Icon</h3>
+    <canvas id="icon128" width="128" height="128"></canvas>
+  </div>
+
+  <script>
+    function drawIcon(canvas, size) {
+      const ctx = canvas.getContext('2d');
+
+      // Background - gradient
+      const gradient = ctx.createLinearGradient(0, 0, size, size);
+      gradient.addColorStop(0, '#4f46e5');
+      gradient.addColorStop(1, '#6366f1');
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, size, size);
+
+      // Draw robot emoji-style icon
+      ctx.fillStyle = 'white';
+
+      // Head
+      const headSize = size * 0.5;
+      const headX = size * 0.25;
+      const headY = size * 0.3;
+      ctx.fillRect(headX, headY, headSize, headSize);
+
+      // Eyes
+      ctx.fillStyle = '#4f46e5';
+      const eyeSize = size * 0.1;
+      const eyeY = headY + headSize * 0.3;
+      ctx.fillRect(headX + headSize * 0.25, eyeY, eyeSize, eyeSize);
+      ctx.fillRect(headX + headSize * 0.65, eyeY, eyeSize, eyeSize);
+
+      // Antenna
+      ctx.fillStyle = 'white';
+      const antennaX = size * 0.5;
+      const antennaHeight = size * 0.15;
+      ctx.fillRect(antennaX - size * 0.02, headY - antennaHeight, size * 0.04, antennaHeight);
+
+      // Antenna tip
+      ctx.beginPath();
+      ctx.arc(antennaX, headY - antennaHeight, size * 0.05, 0, 2 * Math.PI);
+      ctx.fill();
+    }
+
+    // Generate all three sizes
+    drawIcon(document.getElementById('icon16'), 16);
+    drawIcon(document.getElementById('icon48'), 48);
+    drawIcon(document.getElementById('icon128'), 128);
+  </script>
+</body>
+</html>
