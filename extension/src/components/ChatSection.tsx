@@ -62,6 +62,15 @@ function ChatSection({ messages, onSendMessage }: ChatSectionProps) {
             {message.content.split('\n').map((line, i) => (
               <p key={i}>{line || '\u00A0'}</p>
             ))}
+            {message.imageUrl && (
+              <div className="message-image-container">
+                <img
+                  src={message.imageUrl}
+                  alt={message.imageCaption || 'Screenshot'}
+                  className="message-image"
+                />
+              </div>
+            )}
           </div>
         </div>
       );

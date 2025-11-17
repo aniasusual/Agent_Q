@@ -10,9 +10,12 @@ export interface Message {
 }
 
 export interface ServerMessage {
-  type: 'connected' | 'agent_response' | 'agent_thinking' | 'error' | 'pong';
+  type: 'connected' | 'agent_response' | 'agent_thinking' | 'error' | 'pong' | 'screenshot' | 'code_generated';
   content: string;
   timestamp: string;
+  imageUrl?: string;
+  imageCaption?: string;
+  code?: string;
 }
 
 export type MessageHandler = (message: ServerMessage) => void;
