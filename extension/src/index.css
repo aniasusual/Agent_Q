@@ -5,28 +5,28 @@
 }
 
 :root {
-  /* Simple Dark Theme */
-  --bg-primary: #1e1e1e;
-  --bg-secondary: #252526;
-  --bg-tertiary: #2d2d30;
-  --border-color: #3e3e42;
+  /* Pure Black Theme */
+  --bg-primary: #000000;
+  --bg-secondary: #0a0a0a;
+  --bg-tertiary: #1a1a1a;
+  --border-color: #2a2a2a;
 
   /* Accent */
-  --accent-primary: #007acc;
-  --accent-hover: #005a9e;
+  --accent-primary: #3b82f6;
+  --accent-hover: #2563eb;
 
   /* Status Colors */
-  --success-color: #4ec9b0;
-  --error-color: #f48771;
-  --warning-color: #dcdcaa;
+  --success-color: #10b981;
+  --error-color: #ef4444;
+  --warning-color: #f59e0b;
 
   /* Text Colors */
-  --text-primary: #cccccc;
-  --text-secondary: #969696;
-  --text-muted: #6a6a6a;
+  --text-primary: #ffffff;
+  --text-secondary: #9ca3af;
+  --text-muted: #6b7280;
 
   /* Shadows */
-  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.2);
+  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.5);
 }
 
 body {
