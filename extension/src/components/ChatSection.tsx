@@ -42,24 +42,39 @@ function ChatSection({ messages, onSendMessage }: ChatSectionProps) {
     e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
   };
 
+  // Group messages: show avatar only for first message in consecutive bot messages
+  const renderMessages = () => {
+    return messages.map((message, index) => {
+      const isUser = message.isUser;
+      const prevMessage = index > 0 ? messages[index - 1] : null;
+      const showAvatar = isUser || !prevMessage || prevMessage.isUser;
+
+      return (
+        <div key={message.id} className={`chat-message ${isUser ? 'user-message' : 'bot-message'}`}>
+          {showAvatar ? (
+            <div className={isUser ? 'user-avatar' : 'bot-avatar'}>
+              {isUser ? 'U' : 'AI'}
+            </div>
+          ) : (
+            <div style={{ width: '32px', flexShrink: 0 }} />
+          )}
+          <div className="message-content">
+            {message.content.split('\n').map((line, i) => (
+              <p key={i}>{line || '\u00A0'}</p>
+            ))}
+          </div>
+        </div>
+      );
+    });
+  };
+
   return (
     <section className="chat-section">
       <div className="section-header">
         <h2>Chat</h2>
       </div>
       <div className="chat-container" ref={chatContainerRef}>
-        {messages.map((message) => (
-          <div key={message.id} className={`chat-message ${message.isUser ? 'user-message' : ''}`}>
-            <div className={message.isUser ? 'user-avatar' : 'bot-avatar'}>
-              {message.isUser ? 'U' : 'AI'}
-            </div>
-            <div className="message-content">
-              {message.content.split('\n').map((line, i) => (
-                <p key={i}>{line}</p>
-              ))}
-            </div>
-          </div>
-        ))}
+        {renderMessages()}
       </div>
       <div className="chat-input-container">
         <textarea
