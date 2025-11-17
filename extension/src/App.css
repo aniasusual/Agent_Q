@@ -210,6 +210,33 @@
   color: var(--text-primary);
 }
 
+/* Screenshot/Image Display */
+.message-image-container {
+  margin-top: 12px;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--border-color);
+  max-width: 100%;
+}
+
+.message-image {
+  width: 100%;
+  height: auto;
+  display: block;
+  background: var(--bg-secondary);
+  cursor: pointer;
+  transition: transform 0.2s ease;
+}
+
+.message-image:hover {
+  transform: scale(1.02);
+}
+
+.user-message .message-image-container {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
 /* Chat Input */
 .chat-input-container {
   display: flex;

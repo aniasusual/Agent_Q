@@ -11,6 +11,8 @@ export interface Message {
   content: string;
   isUser: boolean;
   timestamp: Date;
+  imageUrl?: string;
+  imageCaption?: string;
 }
 
 function App() {
@@ -78,6 +80,21 @@ function App() {
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, botMessage]);
+    } else if (serverMessage.type === 'screenshot') {
+      const screenshotMessage: Message = {
+        id: Date.now().toString(),
+        content: serverMessage.imageCaption || 'Screenshot captured',
+        isUser: false,
+        timestamp: new Date(),
+        imageUrl: serverMessage.imageUrl,
+        imageCaption: serverMessage.imageCaption,
+      };
+      setMessages((prev) => [...prev, screenshotMessage]);
+    } else if (serverMessage.type === 'code_generated') {
+      // Update the code editor with generated Playwright code
+      if (serverMessage.code) {
+        setCode(serverMessage.code);
+      }
     } else if (serverMessage.type === 'error') {
       const errorMessage: Message = {
         id: Date.now().toString(),
