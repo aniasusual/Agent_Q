@@ -1,0 +1,59 @@
+.resizable-panels {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+.resizable-panel {
+  overflow: auto;
+}
+
+.top-panel {
+  flex-shrink: 0;
+}
+
+.bottom-panel {
+  flex: 1;
+  overflow: auto;
+}
+
+.resizable-divider {
+  height: 8px;
+  background: var(--border-color);
+  cursor: row-resize;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s ease;
+  position: relative;
+}
+
+.resizable-divider:hover {
+  background: var(--accent-primary);
+}
+
+.resizable-divider.dragging {
+  background: var(--accent-primary);
+}
+
+.divider-handle {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  pointer-events: none;
+}
+
+.divider-line {
+  width: 32px;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 1px;
+}
+
+.resizable-divider:hover .divider-line,
+.resizable-divider.dragging .divider-line {
+  background: rgba(255, 255, 255, 0.8);
+}

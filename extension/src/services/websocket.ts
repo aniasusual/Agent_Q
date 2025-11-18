@@ -3,19 +3,22 @@
  */
 
 export interface Message {
-  type: 'chat_message' | 'ping';
+  type: 'chat_message' | 'ping' | 'run_code';
   message?: string;
   project_id?: string;
   access_token?: string;
+  code?: string;
 }
 
 export interface ServerMessage {
-  type: 'connected' | 'agent_response' | 'agent_thinking' | 'error' | 'pong' | 'screenshot' | 'code_generated';
+  type: 'connected' | 'agent_response' | 'agent_response_chunk' | 'agent_thinking' | 'error' | 'pong' | 'screenshot' | 'code_generated' | 'code_execution_started' | 'code_execution_result';
   content: string;
   timestamp: string;
   imageUrl?: string;
   imageCaption?: string;
   code?: string;
+  success?: boolean;
+  output?: string;
 }
 
 export type MessageHandler = (message: ServerMessage) => void;
@@ -116,6 +119,15 @@ class WebSocketService {
     this.sendMessage({
       type: 'chat_message',
       message: text,
+      project_id: projectId,
+      access_token: accessToken
+    });
+  }
+
+  runCode(code: string, projectId: string = 'default', accessToken: string = 'default'): void {
+    this.sendMessage({
+      type: 'run_code',
+      code: code,
       project_id: projectId,
       access_token: accessToken
     });

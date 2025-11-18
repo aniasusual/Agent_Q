@@ -54,8 +54,20 @@ def get_main_agent(
         tools=[mcp_tools],
         markdown=True,
         description=SYSTEM_PROMPT,
-        add_history_to_context=True,
+        # Session and history management
+        add_history_to_context=True,     # Automatically include previous messages
+        num_history_runs=5,                # Include last 5 conversation turns
+        read_chat_history=True,           # Give agent ability to read history
+        search_session_history=True,      # Enable cross-session context retrieval
+        num_history_sessions=2,           # Search across 2 most recent sessions
         db=db,
+        # Memory features
         enable_user_memories=True,
         enable_agentic_memory=True,
+        # Session summaries for long conversations
+        enable_session_summaries=True,
+        # Storage optimization - store everything for debugging
+        store_media=True,                 # Store images from screenshots
+        store_tool_messages=True,         # Store tool execution details
+        store_history_messages=True,      # Store conversation history
     )
