@@ -366,9 +366,18 @@ async def handle_chat_message(client_id: str, message_data: dict):
         import traceback
         traceback.print_exc()
 
+        # Handle rate limit errors with user-friendly message
+        error_message = str(e)
+        if "429" in error_message or "RESOURCE_EXHAUSTED" in error_message:
+            error_message = "⚠️ Rate limit exceeded. Please wait a few minutes and try again. If this persists, check your Gemini API quota."
+        elif "401" in error_message or "403" in error_message:
+            error_message = "⚠️ Authentication error. Please check your Gemini API key."
+        else:
+            error_message = f"Failed to process message: {str(e)}"
+
         await manager.send_message(client_id, {
             "type": "error",
-            "content": f"Failed to process message: {str(e)}",
+            "content": error_message,
             "timestamp": datetime.now().isoformat()
         })
 
