@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { monaco } from '../monaco-setup';
+import { websocketService } from '../services/websocket';
 
 interface EditorSectionProps {
   code: string;
@@ -51,7 +52,11 @@ function EditorSection({ code, onCodeChange }: EditorSectionProps) {
   }, [code]);
 
   const handleRun = () => {
-    console.log('Run preview - Coming in Milestone 5');
+    const currentCode = monacoEditorRef.current?.getValue() || code;
+    if (currentCode && currentCode !== '// Your Playwright test will appear here\n') {
+      console.log('[EditorSection] Running code...');
+      websocketService.runCode(currentCode);
+    }
   };
 
   const handleSave = () => {

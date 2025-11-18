@@ -43,6 +43,22 @@ def extract_playwright_code(content: str) -> str:
     return ""
 
 
+def remove_playwright_code_blocks(content: str) -> str:
+    """
+    Remove ```playwright code blocks from the content to avoid showing them in chat.
+    """
+    import re
+
+    # Remove ```playwright code blocks
+    pattern = r'```playwright\s*\n.*?\n```'
+    content = re.sub(pattern, '', content, flags=re.DOTALL)
+
+    # Clean up extra newlines
+    content = re.sub(r'\n{3,}', '\n\n', content)
+
+    return content.strip()
+
+
 class ConnectionManager:
     """Manages WebSocket connections from browser extensions"""
 
@@ -124,6 +140,8 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
 
             if message_type == "chat_message":
                 await handle_chat_message(client_id, message_data)
+            elif message_type == "run_code":
+                await handle_run_code(client_id, message_data)
             elif message_type == "ping":
                 await manager.send_message(client_id, {
                     "type": "pong",
@@ -165,67 +183,162 @@ async def handle_chat_message(client_id: str, message_data: dict):
         })
 
         agent = manager.get_or_create_agent(client_id, project_id, access_token)
-        # Use client_id as session_id to maintain conversation history
-        response = await agent.arun(user_message, stream=False, session_id=client_id)
+        # Use project_id as user_id and client_id as session_id for proper session management
+        # This allows multiple sessions per user (project) while maintaining isolation
 
-        response_content = response.content if hasattr(response, 'content') else str(response)
+        # Enable streaming with events to get tool completion events with images
+        # stream_events=True is required to receive ToolCallCompletedEvent with MCP tool images
+        response_stream = agent.arun(
+            user_message,
+            stream=True,
+            stream_events=True,  # CRITICAL: Required for tool responses with images
+            user_id=project_id,      # Isolate conversations by project
+            session_id=client_id     # Maintain conversation history per client
+        )
 
-        # Debug: Log response structure
-        print(f"\n{'='*80}")
-        print(f"[DEBUG] Response type: {type(response)}")
+        # Stream the response and process images in real-time
+        full_response_content = ""
+        processed_image_ids = set()  # Track processed images to avoid duplicates
 
-        # Check if response has messages with images
-        if hasattr(response, 'messages') and response.messages:
-            print(f"[DEBUG] Response has {len(response.messages)} messages")
-            for idx, msg in enumerate(response.messages):
-                print(f"[DEBUG] Message {idx}: role={msg.role if hasattr(msg, 'role') else 'unknown'}")
-                if hasattr(msg, 'images') and msg.images:
-                    print(f"[DEBUG] Message {idx} has {len(msg.images)} images")
-                    for img_idx, img in enumerate(msg.images):
-                        print(f"[DEBUG]   Image {img_idx}: type={type(img)}, attributes={[a for a in dir(img) if not a.startswith('_')][:10]}")
-        print(f"{'='*80}\n")
+        async for chunk in response_stream:
+            # Debug: Log chunk type
+            chunk_type = type(chunk).__name__
+            print(f"[DEBUG] Chunk type: {chunk_type}")
 
-        # Extract screenshots from agent messages
-        screenshots = []
+            # Handle ToolCallCompletedEvent for tool responses with images
+            if chunk_type == 'ToolCallCompletedEvent':
+                print(f"[DEBUG] ToolCallCompletedEvent detected!")
+                print(f"[DEBUG] Has images: {hasattr(chunk, 'images') and chunk.images is not None}")
 
-        # Check messages for images
-        if hasattr(response, 'messages') and response.messages:
-            for msg_idx, msg in enumerate(response.messages):
-                if hasattr(msg, 'images') and msg.images:
-                    for img_idx, img in enumerate(msg.images):
+                # Process images from tool completion
+                if hasattr(chunk, 'images') and chunk.images:
+                    images = chunk.images
+                    print(f"[DEBUG] Found {len(images)} images in ToolCallCompletedEvent")
+
+                    for img_idx, image in enumerate(images):
+                        # Create unique ID for this image
+                        img_id = id(image)
+
+                        if img_id in processed_image_ids:
+                            print(f"[DEBUG] Skipping duplicate image {img_id}")
+                            continue
+
+                        processed_image_ids.add(img_id)
+                        print(f"[DEBUG] Processing image {img_idx}: type={type(image)}")
+
                         try:
-                            # Images are agno Image objects with content as bytes
-                            if hasattr(img, 'content') and img.content:
-                                print(f"[DEBUG] Processing image {img_idx} from message {msg_idx}")
-                                print(f"[DEBUG] Image content type: {type(img.content)}, length: {len(img.content) if img.content else 0}")
+                            import base64
 
-                                # Convert bytes to base64
-                                import base64
-                                base64_data = base64.b64encode(img.content).decode('utf-8')
-                                print(f"[DEBUG] Converted to base64, length: {len(base64_data)}")
+                            # Handle image content or URL
+                            if hasattr(image, 'content') and image.content:
+                                # Image has bytes content
+                                image_bytes = image.content
+                                if isinstance(image_bytes, bytes):
+                                    base64_data = base64.b64encode(image_bytes).decode('utf-8')
+                                elif isinstance(image_bytes, str):
+                                    base64_data = image_bytes
+                                else:
+                                    print(f"[DEBUG] Unknown image content type: {type(image_bytes)}")
+                                    continue
 
-                                # Upload to Cloudinary
+                                print(f"[DEBUG] Uploading screenshot to Cloudinary...")
                                 upload_result = upload_screenshot_base64(base64_data)
-                                screenshots.append({
-                                    "url": upload_result["url"],
-                                    "width": upload_result.get("width"),
-                                    "height": upload_result.get("height")
+
+                                # Send screenshot immediately
+                                await manager.send_message(client_id, {
+                                    "type": "screenshot",
+                                    "content": "Screenshot captured",
+                                    "imageUrl": upload_result["url"],
+                                    "imageCaption": f"Screenshot ({upload_result.get('width')}x{upload_result.get('height')})",
+                                    "timestamp": datetime.now().isoformat()
                                 })
-                                print(f"[Cloudinary] Screenshot uploaded: {upload_result['url']}")
+                                print(f"[Cloudinary] Screenshot uploaded and sent: {upload_result['url']}")
+
+                            elif hasattr(image, 'url') and image.url:
+                                # Image has URL
+                                print(f"[DEBUG] Image has URL: {image.url}")
+                                await manager.send_message(client_id, {
+                                    "type": "screenshot",
+                                    "content": "Screenshot captured",
+                                    "imageUrl": image.url,
+                                    "imageCaption": "Screenshot",
+                                    "timestamp": datetime.now().isoformat()
+                                })
+                                print(f"[DEBUG] Screenshot URL sent: {image.url}")
+
                         except Exception as e:
-                            print(f"[Cloudinary] Failed to upload screenshot: {e}")
+                            print(f"[Cloudinary] Failed to process image: {e}")
                             import traceback
                             traceback.print_exc()
 
-        # Send screenshots as separate messages
-        for idx, screenshot in enumerate(screenshots):
-            await manager.send_message(client_id, {
-                "type": "screenshot",
-                "content": f"Screenshot {idx + 1}",
-                "imageUrl": screenshot["url"],
-                "imageCaption": f"Screenshot captured ({screenshot.get('width')}x{screenshot.get('height')})",
-                "timestamp": datetime.now().isoformat()
-            })
+            # Handle RunContentEvent for text streaming
+            elif chunk_type == 'RunContentEvent':
+                # Stream text content
+                if hasattr(chunk, 'content') and chunk.content:
+                    full_response_content += chunk.content
+                    await manager.send_message(client_id, {
+                        "type": "agent_response_chunk",
+                        "content": chunk.content,
+                        "timestamp": datetime.now().isoformat()
+                    })
+
+            # Legacy fallback: Check for images directly on the chunk
+            if hasattr(chunk, 'images') and chunk.images and chunk_type != 'ToolCallCompletedEvent':
+                images = chunk.images
+                if isinstance(images, list):
+                    print(f"[DEBUG] Chunk has {len(images)} images")
+                    for img_idx, image_response in enumerate(images):
+                        # Create unique ID for this image
+                        img_id = id(image_response)
+
+                        if img_id in processed_image_ids:
+                            print(f"[DEBUG] Skipping duplicate image {img_id}")
+                            continue
+
+                        print(f"[DEBUG] Processing image {img_idx}: type={type(image_response)}")
+
+                        # Extract image bytes from image_response.content
+                        if hasattr(image_response, 'content') and image_response.content:
+                            try:
+                                processed_image_ids.add(img_id)
+
+                                import base64
+
+                                # Handle different image content formats
+                                image_bytes = image_response.content
+                                if isinstance(image_bytes, bytes):
+                                    base64_data = base64.b64encode(image_bytes).decode('utf-8')
+                                elif isinstance(image_bytes, str):
+                                    base64_data = image_bytes
+                                else:
+                                    print(f"[DEBUG] Unknown image content type: {type(image_bytes)}")
+                                    continue
+
+                                print(f"[DEBUG] Uploading screenshot to Cloudinary...")
+                                upload_result = upload_screenshot_base64(base64_data)
+
+                                # Send screenshot immediately as it arrives
+                                await manager.send_message(client_id, {
+                                    "type": "screenshot",
+                                    "content": "Screenshot captured",
+                                    "imageUrl": upload_result["url"],
+                                    "imageCaption": f"Screenshot ({upload_result.get('width')}x{upload_result.get('height')})",
+                                    "timestamp": datetime.now().isoformat()
+                                })
+                                print(f"[Cloudinary] Screenshot uploaded and sent: {upload_result['url']}")
+                            except Exception as e:
+                                print(f"[Cloudinary] Failed to process image: {e}")
+                                import traceback
+                                traceback.print_exc()
+
+        # Get final response content
+        response_content = full_response_content
+
+        # Debug: Log final stats
+        print(f"\n{'='*80}")
+        print(f"[DEBUG] Total processed images: {len(processed_image_ids)}")
+        print(f"[DEBUG] Total response length: {len(response_content)} characters")
+        print(f"{'='*80}\n")
 
         # Extract Playwright code from response
         playwright_code = extract_playwright_code(response_content)
@@ -238,10 +351,13 @@ async def handle_chat_message(client_id: str, message_data: dict):
                 "timestamp": datetime.now().isoformat()
             })
 
-        # Send the agent response
+        # Remove code blocks from response content before sending to chat
+        clean_response = remove_playwright_code_blocks(response_content)
+
+        # Send the agent response (without code blocks)
         await manager.send_message(client_id, {
             "type": "agent_response",
-            "content": response_content,
+            "content": clean_response,
             "timestamp": datetime.now().isoformat()
         })
 
@@ -253,5 +369,107 @@ async def handle_chat_message(client_id: str, message_data: dict):
         await manager.send_message(client_id, {
             "type": "error",
             "content": f"Failed to process message: {str(e)}",
+            "timestamp": datetime.now().isoformat()
+        })
+
+
+async def handle_run_code(client_id: str, message_data: dict):
+    """Handle code execution requests"""
+    code = message_data.get("code", "")
+    project_id = message_data.get("project_id", "default")
+    access_token = message_data.get("access_token", "default")
+
+    if not code:
+        await manager.send_message(client_id, {
+            "type": "error",
+            "content": "No code provided for execution",
+            "timestamp": datetime.now().isoformat()
+        })
+        return
+
+    try:
+        # Notify execution started
+        await manager.send_message(client_id, {
+            "type": "code_execution_started",
+            "content": "Executing Playwright test...",
+            "timestamp": datetime.now().isoformat()
+        })
+
+        # Create a temporary directory with proper Playwright setup
+        import tempfile
+        import subprocess
+        import shutil
+
+        # Create temp directory for test execution
+        temp_dir = tempfile.mkdtemp(prefix='playwright_test_')
+        test_file = os.path.join(temp_dir, 'test.spec.ts')
+
+        # Write the test file
+        with open(test_file, 'w') as f:
+            f.write(code)
+
+        try:
+            # Run Playwright test without requiring config file
+            # Use --browser to specify browser directly instead of --project
+            result = subprocess.run(
+                [
+                    'npx',
+                    '-y',  # Auto-confirm npx prompts
+                    'playwright',
+                    'test',
+                    test_file,
+                    '--headed',
+                    '--browser=chromium',  # Use --browser instead of --project
+                    '--reporter=list',
+                    '--timeout=30000',  # 30 second test timeout
+                    '--max-failures=1'   # Stop on first failure
+                ],
+                capture_output=True,
+                text=True,
+                timeout=90,  # 90 second overall timeout
+                cwd=temp_dir,
+                env={**os.environ, 'CI': '0'}  # Disable CI mode
+            )
+
+            success = result.returncode == 0
+            output = result.stdout if result.stdout else result.stderr
+
+            # Send execution result
+            await manager.send_message(client_id, {
+                "type": "code_execution_result",
+                "content": "Test execution completed" if success else "Test execution failed",
+                "success": success,
+                "output": output,
+                "timestamp": datetime.now().isoformat()
+            })
+
+        finally:
+            # Clean up temporary directory
+            try:
+                shutil.rmtree(temp_dir)
+            except:
+                pass
+
+    except subprocess.TimeoutExpired:
+        await manager.send_message(client_id, {
+            "type": "error",
+            "content": "Test execution timed out (90 seconds limit)",
+            "timestamp": datetime.now().isoformat()
+        })
+        # Clean up temp directory on timeout
+        try:
+            import shutil
+            if 'temp_dir' in locals():
+                shutil.rmtree(temp_dir)
+        except:
+            pass
+    except Exception as e:
+        print(f"[Code Execution] Error for client {client_id}: {e}")
+        import traceback
+        traceback.print_exc()
+
+        await manager.send_message(client_id, {
+            "type": "error",
+            "content": f"Failed to execute code: {str(e)}",
             "timestamp": datetime.now().isoformat()
         })
