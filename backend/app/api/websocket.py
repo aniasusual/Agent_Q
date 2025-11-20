@@ -65,6 +65,7 @@ class ConnectionManager:
     def __init__(self):
         self.active_connections: Dict[str, WebSocket] = {}
         self.agent_sessions: Dict[str, Agent] = {}
+        self.paused_runs: Dict[str, any] = {}  # Store paused run states for HITL
 
     async def connect(self, websocket: WebSocket, client_id: str):
         """Accept and store a new WebSocket connection"""
@@ -78,6 +79,8 @@ class ConnectionManager:
             del self.active_connections[client_id]
         if client_id in self.agent_sessions:
             del self.agent_sessions[client_id]
+        if client_id in self.paused_runs:
+            del self.paused_runs[client_id]
         print(f"[WebSocket] Client {client_id} disconnected")
 
     async def send_message(self, client_id: str, message: dict):
@@ -105,7 +108,8 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
     """
     WebSocket endpoint for real-time communication with browser extension.
 
-    Message format from extension:
+    Message formats from extension:
+    1. Chat message:
     {
         "type": "chat_message",
         "message": "user message text",
@@ -113,14 +117,70 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
         "access_token": "access_token"
     }
 
-    Message format to extension:
+    2. User input response (for HITL):
     {
-        "type": "agent_response" | "agent_thinking" | "error" | "connected" | "screenshot" | "code_generated",
+        "type": "user_input_response",
+        "inputs": {
+            "field_name": "field_value",
+            ...
+        }
+    }
+
+    3. Run code:
+    {
+        "type": "run_code",
+        "code": "Playwright code to execute",
+        "project_id": "project_id",
+        "access_token": "access_token"
+    }
+
+    Message formats to extension:
+    1. Standard responses:
+    {
+        "type": "agent_response" | "agent_thinking" | "agent_response_chunk" | "error" | "connected",
         "content": "response text",
-        "timestamp": "ISO timestamp",
-        "imageUrl": "optional image URL for screenshots",
-        "imageCaption": "optional caption for screenshots",
-        "code": "optional Playwright code"
+        "timestamp": "ISO timestamp"
+    }
+
+    2. Screenshot:
+    {
+        "type": "screenshot",
+        "content": "Screenshot captured",
+        "imageUrl": "cloudinary URL",
+        "imageCaption": "screenshot caption",
+        "timestamp": "ISO timestamp"
+    }
+
+    3. Code generated:
+    {
+        "type": "code_generated",
+        "content": "Playwright code generated",
+        "code": "Playwright test code",
+        "timestamp": "ISO timestamp"
+    }
+
+    4. User input request (HITL):
+    {
+        "type": "user_input_request",
+        "content": "The agent needs additional information to proceed",
+        "fields": [
+            {
+                "name": "field_name",
+                "description": "field description",
+                "field_type": "string | number | boolean",
+                "required": true
+            }
+        ],
+        "timestamp": "ISO timestamp"
+    }
+
+    5. Code execution result:
+    {
+        "type": "code_execution_result" | "code_execution_started",
+        "content": "execution status",
+        "success": true | false,
+        "output": "execution output",
+        "timestamp": "ISO timestamp"
     }
     """
     await manager.connect(websocket, client_id)
@@ -142,6 +202,8 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                 await handle_chat_message(client_id, message_data)
             elif message_type == "run_code":
                 await handle_run_code(client_id, message_data)
+            elif message_type == "user_input_response":
+                await handle_user_input_response(client_id, message_data)
             elif message_type == "ping":
                 await manager.send_message(client_id, {
                     "type": "pong",
@@ -199,8 +261,12 @@ async def handle_chat_message(client_id: str, message_data: dict):
         # Stream the response and process images in real-time
         full_response_content = ""
         processed_image_ids = set()  # Track processed images to avoid duplicates
+        run_response = None  # Store the final run response for HITL
 
         async for chunk in response_stream:
+            # Store the chunk as potential run_response (last chunk will be the final response)
+            run_response = chunk
+
             # Debug: Log chunk type
             chunk_type = type(chunk).__name__
             print(f"[DEBUG] Chunk type: {chunk_type}")
@@ -340,6 +406,69 @@ async def handle_chat_message(client_id: str, message_data: dict):
         print(f"[DEBUG] Total response length: {len(response_content)} characters")
         print(f"{'='*80}\n")
 
+        # Check if the agent paused for user input (HITL)
+        if run_response and hasattr(run_response, 'is_paused') and run_response.is_paused:
+            print(f"[HITL] Agent paused for user input")
+            # Store the paused run state
+            manager.paused_runs[client_id] = run_response
+
+            # Extract user input fields
+            user_input_fields = []
+
+            # Method 1: Check tools_requiring_user_input (correct attribute name)
+            if hasattr(run_response, 'tools_requiring_user_input') and run_response.tools_requiring_user_input:
+                for tool in run_response.tools_requiring_user_input:
+                    # The correct attribute is user_input_schema, not user_input_fields
+                    if hasattr(tool, 'user_input_schema'):
+                        for field in tool.user_input_schema:
+                            if field.value is None:  # Only request fields that need values
+                                # Convert field_type to string (it's a Python type object)
+                                field_type_str = field.field_type.__name__ if hasattr(field.field_type, '__name__') else str(field.field_type)
+                                user_input_fields.append({
+                                    "name": field.name,
+                                    "description": field.description,
+                                    "field_type": field_type_str,
+                                    "required": True
+                                })
+                    # Fallback: check for user_input_fields (in case API differs)
+                    elif hasattr(tool, 'user_input_fields'):
+                        for field in tool.user_input_fields:
+                            if field.value is None:
+                                # Convert field_type to string
+                                field_type_str = field.field_type.__name__ if hasattr(field.field_type, '__name__') else str(field.field_type)
+                                user_input_fields.append({
+                                    "name": field.name,
+                                    "description": field.description,
+                                    "field_type": field_type_str,
+                                    "required": True
+                                })
+
+            # Method 2: Check direct user_input_schema on run_response
+            elif hasattr(run_response, 'user_input_schema') and run_response.user_input_schema:
+                for field in run_response.user_input_schema:
+                    if field.value is None:
+                        # Convert field_type to string
+                        field_type_str = field.field_type.__name__ if hasattr(field.field_type, '__name__') else str(field.field_type)
+                        user_input_fields.append({
+                            "name": field.name,
+                            "description": field.description,
+                            "field_type": field_type_str,
+                            "required": True
+                        })
+
+            if user_input_fields:
+                print(f"[HITL] Requesting {len(user_input_fields)} user inputs: {user_input_fields}")
+                # Send user input request to frontend
+                await manager.send_message(client_id, {
+                    "type": "user_input_request",
+                    "content": "The agent needs additional information to proceed",
+                    "fields": user_input_fields,
+                    "timestamp": datetime.now().isoformat()
+                })
+                return  # Don't send normal response, wait for user input
+            else:
+                print(f"[HITL] WARNING: Agent paused but no user input fields found!")
+
         # Extract Playwright code from response
         playwright_code = extract_playwright_code(response_content)
         if playwright_code:
@@ -378,6 +507,208 @@ async def handle_chat_message(client_id: str, message_data: dict):
         await manager.send_message(client_id, {
             "type": "error",
             "content": error_message,
+            "timestamp": datetime.now().isoformat()
+        })
+
+
+async def handle_user_input_response(client_id: str, message_data: dict):
+    """Handle user input responses for HITL and resume agent execution"""
+    user_inputs = message_data.get("inputs", {})
+
+    if not user_inputs:
+        await manager.send_message(client_id, {
+            "type": "error",
+            "content": "No user inputs provided",
+            "timestamp": datetime.now().isoformat()
+        })
+        return
+
+    # Check if we have a paused run for this client
+    if client_id not in manager.paused_runs:
+        await manager.send_message(client_id, {
+            "type": "error",
+            "content": "No paused agent run found. Please start a new conversation.",
+            "timestamp": datetime.now().isoformat()
+        })
+        return
+
+    try:
+        print(f"[HITL] Received user inputs: {user_inputs}")
+
+        # Get the paused run response
+        run_response = manager.paused_runs[client_id]
+
+        # Update the user input fields with provided values
+        if hasattr(run_response, 'tools_requiring_user_input') and run_response.tools_requiring_user_input:
+            for tool in run_response.tools_requiring_user_input:
+                # Use user_input_schema (correct attribute name)
+                if hasattr(tool, 'user_input_schema'):
+                    for field in tool.user_input_schema:
+                        if field.name in user_inputs:
+                            field.value = user_inputs[field.name]
+                            print(f"[HITL] Set field '{field.name}' = '{field.value}'")
+                # Fallback to user_input_fields
+                elif hasattr(tool, 'user_input_fields'):
+                    for field in tool.user_input_fields:
+                        if field.name in user_inputs:
+                            field.value = user_inputs[field.name]
+                            print(f"[HITL] Set field '{field.name}' = '{field.value}'")
+
+        # Notify user that we're resuming
+        await manager.send_message(client_id, {
+            "type": "agent_thinking",
+            "content": "Resuming with your input...",
+            "timestamp": datetime.now().isoformat()
+        })
+
+        # Get the agent session
+        agent = manager.agent_sessions.get(client_id)
+        if not agent:
+            await manager.send_message(client_id, {
+                "type": "error",
+                "content": "Agent session not found. Please start a new conversation.",
+                "timestamp": datetime.now().isoformat()
+            })
+            return
+
+        # Continue the agent run with the updated values
+        response_stream = agent.continue_run(
+            run_response=run_response,
+            stream=True,
+            stream_events=True
+        )
+
+        # Process the continued response (similar to handle_chat_message)
+        full_response_content = ""
+        processed_image_ids = set()
+        continued_run_response = None
+
+        async for chunk in response_stream:
+            continued_run_response = chunk
+            chunk_type = type(chunk).__name__
+            print(f"[DEBUG] Continued run chunk type: {chunk_type}")
+
+            # Handle ToolCallCompletedEvent for screenshots
+            if chunk_type == 'ToolCallCompletedEvent':
+                if hasattr(chunk, 'images') and chunk.images:
+                    images = chunk.images
+                    for image in images:
+                        img_id = id(image)
+                        if img_id in processed_image_ids:
+                            continue
+                        processed_image_ids.add(img_id)
+
+                        try:
+                            import base64
+                            if hasattr(image, 'content') and image.content:
+                                image_bytes = image.content
+                                if isinstance(image_bytes, bytes):
+                                    base64_data = base64.b64encode(image_bytes).decode('utf-8')
+                                elif isinstance(image_bytes, str):
+                                    base64_data = image_bytes
+                                else:
+                                    continue
+
+                                upload_result = upload_screenshot_base64(base64_data)
+                                await manager.send_message(client_id, {
+                                    "type": "screenshot",
+                                    "content": "Screenshot captured",
+                                    "imageUrl": upload_result["url"],
+                                    "imageCaption": f"Screenshot ({upload_result.get('width')}x{upload_result.get('height')})",
+                                    "timestamp": datetime.now().isoformat()
+                                })
+                        except Exception as e:
+                            print(f"[Cloudinary] Failed to process image: {e}")
+
+            # Handle RunContentEvent for text streaming
+            elif chunk_type == 'RunContentEvent':
+                if hasattr(chunk, 'content') and chunk.content:
+                    full_response_content += chunk.content
+                    await manager.send_message(client_id, {
+                        "type": "agent_response_chunk",
+                        "content": chunk.content,
+                        "timestamp": datetime.now().isoformat()
+                    })
+
+        # Check if agent paused again (for multi-turn HITL)
+        if continued_run_response and hasattr(continued_run_response, 'is_paused') and continued_run_response.is_paused:
+            print(f"[HITL] Agent paused again for more input")
+            manager.paused_runs[client_id] = continued_run_response
+
+            if hasattr(continued_run_response, 'tools_requiring_user_input') and continued_run_response.tools_requiring_user_input:
+                user_input_fields = []
+                for tool in continued_run_response.tools_requiring_user_input:
+                    # Use user_input_schema (correct attribute name)
+                    if hasattr(tool, 'user_input_schema'):
+                        for field in tool.user_input_schema:
+                            if field.value is None:
+                                # Convert field_type to string
+                                field_type_str = field.field_type.__name__ if hasattr(field.field_type, '__name__') else str(field.field_type)
+                                user_input_fields.append({
+                                    "name": field.name,
+                                    "description": field.description,
+                                    "field_type": field_type_str,
+                                    "required": True
+                                })
+                    # Fallback to user_input_fields
+                    elif hasattr(tool, 'user_input_fields'):
+                        for field in tool.user_input_fields:
+                            if field.value is None:
+                                # Convert field_type to string
+                                field_type_str = field.field_type.__name__ if hasattr(field.field_type, '__name__') else str(field.field_type)
+                                user_input_fields.append({
+                                    "name": field.name,
+                                    "description": field.description,
+                                    "field_type": field_type_str,
+                                    "required": True
+                                })
+
+                if user_input_fields:
+                    await manager.send_message(client_id, {
+                        "type": "user_input_request",
+                        "content": "The agent needs additional information to proceed",
+                        "fields": user_input_fields,
+                        "timestamp": datetime.now().isoformat()
+                    })
+                    return
+        else:
+            # Clear the paused run since we completed successfully
+            if client_id in manager.paused_runs:
+                del manager.paused_runs[client_id]
+
+        # Process final response
+        response_content = full_response_content
+
+        # Extract Playwright code
+        playwright_code = extract_playwright_code(response_content)
+        if playwright_code:
+            await manager.send_message(client_id, {
+                "type": "code_generated",
+                "content": "Playwright code generated",
+                "code": playwright_code,
+                "timestamp": datetime.now().isoformat()
+            })
+
+        # Send final response
+        clean_response = remove_playwright_code_blocks(response_content)
+        await manager.send_message(client_id, {
+            "type": "agent_response",
+            "content": clean_response,
+            "timestamp": datetime.now().isoformat()
+        })
+
+    except Exception as e:
+        print(f"[HITL] Error processing user input for client {client_id}: {e}")
+        import traceback
+        traceback.print_exc()
+
+        # Clear the paused run on error
+        if client_id in manager.paused_runs:
+            del manager.paused_runs[client_id]
+
+        await manager.send_message(client_id, {
+            "type": "error",
+            "content": f"Failed to process user input: {str(e)}",
             "timestamp": datetime.now().isoformat()
         })
 

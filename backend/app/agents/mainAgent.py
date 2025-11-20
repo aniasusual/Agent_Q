@@ -5,6 +5,7 @@ from agno.agent import Agent
 from agno.models.google import Gemini
 from agno.db.mongo import MongoDb
 from agno.tools.mcp import MCPTools
+from agno.tools.user_control_flow import UserControlFlowTools
 
 from ..prompts.mainAgent import SYSTEM_PROMPT
 
@@ -45,13 +46,18 @@ def get_main_agent(
         timeout_seconds=60,  # Longer timeout for browser startup
     )
 
+    # Initialize User Control Flow Tools for Human-in-the-Loop
+    # This allows the agent to request clarification from users when needed
+    user_control_tools = UserControlFlowTools()
+
     if debug_mode:
         print(f"[DEBUG] Initialized MCPTools for Playwright browser automation")
+        print(f"[DEBUG] Initialized UserControlFlowTools for human-in-the-loop")
         print(f"[DEBUG] Tools will connect on first agent.arun() call")
 
     return Agent(
         model=Gemini(id=model_id),
-        tools=[mcp_tools],
+        tools=[mcp_tools, user_control_tools],
         markdown=True,
         description=SYSTEM_PROMPT,
         # Session and history management
@@ -70,4 +76,5 @@ def get_main_agent(
         store_media=True,                 # Store images from screenshots
         store_tool_messages=True,         # Store tool execution details
         store_history_messages=True,      # Store conversation history
+        debug_mode=True,
     )
